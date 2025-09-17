@@ -56,6 +56,12 @@
 #
 #   Modified by Ivan Brown on 2021-09-19 to include loops that re-try uploads and truncate+appends up to a maximum
 #   number of times if they fail.
+#
+#   Modified by Ivan Brown on 2024-09-24 to fix new problem that appeared after upgrading ArcGIS Pro to 3.3.1; that
+#   problem was .lock files preventing temporary file geodatabase from being zipped. The solution is to read each
+#   file name of temporary file geodatabase and only add files to .zip that don't end w/ .lock.
+#
+#   Modified by Ivan Brown on 2025-09-17 to include spatial-index rebuilds after feature-layer appends.
 
 #HOW TO USE
 #   1) Set major variables in section of this script commented as ***** SET MAJOR VARIABLES HERE *****.
@@ -338,7 +344,8 @@ try:
                the_zip = zipfile.ZipFile(zip_path, 'x')
                gdb_files = os.listdir(os.path.join(temp_subfolder, gdb_name))
                for a_file in gdb_files:
-                  the_zip.write(os.path.join(temp_subfolder, gdb_name, a_file), os.path.join(gdb_name_for_uploading, a_file))
+                  if a_file[len(a_file)- 5:len(a_file)].upper() != '.LOCK':
+                     the_zip.write(os.path.join(temp_subfolder, gdb_name, a_file), os.path.join(gdb_name_for_uploading, a_file))
                the_zip.close()
                make_note("Making fresh connection to AGO...", True)
                del gis
@@ -404,6 +411,22 @@ try:
             sys.exit()
          else:
             make_note("Successful truncate+append.", True, True)
+         #IF IT'S A FEATURE LAYER (SPATIAL), REBUILD SPATIAL INDEX
+         if is_spatial == True:
+            make_note("Rebuilding spatial index...", True, True)
+            the_list = f_layer.properties.get("indexes")
+            success = False
+            counter = 0
+            while counter < len(the_list) and success == False:
+               if the_list[counter].get("indexType") == "Spatial":
+                  the_result = f_layer.manager.update_definition({"indexes":[the_list[counter]]})
+                  if str(the_result) == "{'success': True}":
+                     success = True
+               counter += 1
+            if success == False:
+               make_note("SOMETHING WENT WRONG WITH REBUILDING SPATIAL INDEX. Although this isn't a show stopper, the problem should be investigated.", True, True)
+            else:
+               make_note("Spatial index has been rebuilt.", True, True)
          ####################
          #CAPTURE POST-APPEND RECORD-COUNT OF FEATURE LAYER
          if is_spatial == True:
