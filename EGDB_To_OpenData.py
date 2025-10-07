@@ -62,6 +62,10 @@
 #   file name of temporary file geodatabase and only add files to .zip that don't end w/ .lock.
 #
 #   Modified by Ivan Brown on 2025-09-17 to include spatial-index rebuilds after feature-layer appends.
+#
+#   Modified by Ivan Brown on 2025-10-07 to include handling in case when response from spatial-index rebuild
+#   times out. This happens w/ large feature-layers; the spatial-index rebuild actually does happen, even though the
+#   request times out (seemingly, Python gets a time-out return, but the rebuild is actually happening in the cloud).
 
 #HOW TO USE
 #   1) Set major variables in section of this script commented as ***** SET MAJOR VARIABLES HERE *****.
@@ -95,16 +99,10 @@
 #
 #   For example:
 #      layers = []
-#      layers.append(["BigCity.sde", "", "BigCity.GISadmin.parcels", "Big City Parcels", "77f362f2-9efd-4420-a7fc-6560fd83ef6d", "T"])
-#      layers.append(["BigCity.sde", "", "BigCity.GISadmin.streets", "Big City Streets", "3169e5af-e0b4-4685-bb93-f2605f9391cb", "W"])
+#      layers.append(["BigCity.sde", "", "BigCity.GISadmin.parcels", "Big City Parcels", "287add0c-2062-4df0-b34b-4782848fbe8f", "T"])
+#      layers.append(["BigCity.sde", "", "BigCity.GISadmin.streets", "Big City Streets", "b14f5e9e-b9fd-4d86-82f8-75450b80418b", "W"])
 #(Using implicit line joins--defining items over multiple lines--to make the list more readable).
 layers = []
-layers.append(["BigCity.sde",
-               "",
-               "BigCity.GISadmin.parcels",
-               "Big City Parcels",
-               "ac32ee49-9648-4963-8e61-b974372852e7",
-               "U"])
 
 #AGO u and p.
 #   IMPORTANT!: This script uploads source data to AGO as a temporary file geodatabase, uses that temporary file geodatabase to reload
@@ -115,7 +113,7 @@ u = ""
 p = ""
 
 #Set content_folder to folder (folder name) in AGO user's content that is designated for containing temporary file geodatabases.
-content_folder = "temp"
+content_folder = ""
 
 #Set max_tries to an integer to indicate the maximum number of times script should try each of these 2 tasks:
 #      -upload source data to AGO.
@@ -149,7 +147,6 @@ email_from = ""
 #      ["name1@domain1","name2@domain2"]
 #
 to_list = []
-to_list.append("name@domain")
 #******************** END SECTION FOR MAJOR VARIABLES ****
 
 #MODULES
@@ -413,20 +410,36 @@ try:
             make_note("Successful truncate+append.", True, True)
          #IF IT'S A FEATURE LAYER (SPATIAL), REBUILD SPATIAL INDEX
          if is_spatial == True:
-            make_note("Rebuilding spatial index...", True, True)
-            the_list = f_layer.properties.get("indexes")
-            success = False
-            counter = 0
-            while counter < len(the_list) and success == False:
-               if the_list[counter].get("indexType") == "Spatial":
-                  the_result = f_layer.manager.update_definition({"indexes":[the_list[counter]]})
-                  if str(the_result) == "{'success': True}":
-                     success = True
-               counter += 1
-            if success == False:
-               make_note("SOMETHING WENT WRONG WITH REBUILDING SPATIAL INDEX. Although this isn't a show stopper, the problem should be investigated.", True, True)
-            else:
-               make_note("Spatial index has been rebuilt.", True, True)
+            make_note("Feature layer is spatial. Need to rebuild its spatial index.", True)
+            try:
+               make_note("Making fresh connection to AGO...", True)
+               del gis
+               gis = GIS("https://www.arcgis.com",  username = u, password = p)
+               f_layer = gis.content.get(i[4]).layers[0]
+               make_note("Sending request to ArcGIS Online for rebuilding spatial index...", True, True)
+               #GET INDEXES, FIND Spatial INDEX, REBUILD VIA update_definition()
+               the_list = f_layer.properties.get("indexes")
+               found_it = False
+               inner_counter = 0
+               while inner_counter < len(the_list) and found_it == False:
+                  if the_list[inner_counter].get("indexType") == "Spatial":
+                     found_it = True
+                     #NOTE: SOMETIMES THE RESPONSE FROM update_definition() TIMES OUT, BUT THE INDEX REBUILD COMPLETES.
+                     #      A TIMEOUT SCENARIO CAUSES A BAILOUT FROM THE try TO THE except.
+                     f_layer.manager.update_definition({"indexes":[the_list[inner_counter]]})
+                  inner_counter += 1
+            except:
+               pass
+            #TRY TO READ THE SUBLAYER'S Extent PROPERTY. AN Extent THAT'S NOT NULL IS A SIGN THAT THE SPATIAL INDEX IS REBUILT.
+            try:
+               make_note("Sublayer's Extent property after sending spatial-index rebuild request:  " + str(f_layer.query(return_extent_only = True)), True, True)
+            except:
+               make_note("After sending request for spatial-index rebuild, tried to read the Extent property of the sublayer, but that read failed. ...", True, True)
+               make_note("...That can happen if:", True, True)
+               make_note("......the spatial-index rebuild is still running,", True, True)
+               make_note("......the feature layer's supportsReturningQueryExtent property is false,", True, True)
+               make_note("......or something else went wrong.", True, True)
+               make_note("...Check the sublayer's Extent property in REST. If it's not null, the spatial-index rebuild has likely completed.", True, True)
          ####################
          #CAPTURE POST-APPEND RECORD-COUNT OF FEATURE LAYER
          if is_spatial == True:
