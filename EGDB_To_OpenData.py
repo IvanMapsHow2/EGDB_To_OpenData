@@ -66,6 +66,10 @@
 #   Modified by Ivan Brown on 2025-10-07 to include handling in case when response from spatial-index rebuild
 #   times out. This happens w/ large feature-layers; the spatial-index rebuild actually does happen, even though the
 #   request times out (seemingly, Python gets a time-out return, but the rebuild is actually happening in the cloud).
+#
+#   Modified by Ivan Brown on 2025-12-22 to fix problem where "gis" object (the connection to AGO) seems to sometimes
+#   get overloaded after the spatial-index rebuild when script tries to get feature-layer record count--causing script
+#   to crash; addressed problem by deleting/re-creating the "gis" object after the spatial-index rebuild.
 
 #HOW TO USE
 #   1) Set major variables in section of this script commented as ***** SET MAJOR VARIABLES HERE *****.
@@ -442,6 +446,9 @@ try:
                make_note("...Check the sublayer's Extent property in REST. If it's not null, the spatial-index rebuild has likely completed.", True, True)
          ####################
          #CAPTURE POST-APPEND RECORD-COUNT OF FEATURE LAYER
+         make_note("Making fresh connection to AGO...", True)
+         del gis
+         gis = GIS("https://www.arcgis.com",  username = u, password = p)
          if is_spatial == True:
             post_append_feature_layer_count = str(gis.content.get(i[4]).layers[0].query(return_count_only = True))
          else:
